@@ -14,7 +14,6 @@ class CellAgent(mesa.Agent):
     def __init__(
         self,
         model: mesa.Model,
-        pos: Optional[Tuple[int, int]] = None,
         state: int = VNState.U,
     ) -> None:
         super().__init__(model)
@@ -88,7 +87,7 @@ class VonNeumannCA(mesa.Model):
                 state = VNState.U
                 if initial_pattern and (x, y) in initial_pattern:
                     state = initial_pattern[(x, y)]
-                agent = CellAgent(self, (x, y), state=state)
+                agent = CellAgent(self, state=state)
                 self.grid.place_agent(agent, (x, y))
                 self.cell_map[(x, y)] = agent
 

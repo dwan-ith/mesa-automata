@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Von Neumann 29-State Cellular Automaton | Mesa</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0a0d14;
+      --panel-bg: rgba(18, 23, 34, 0.85);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --accent: #58a6ff;
+      --accent-glow: rgba(88, 166, 255, 0.25);
+      --pulse-glow: rgba(39, 219, 129, 0.4);
+      --text-main: #f0f6fc;
+      --text-dim: #8b949e;
+      --text-muted: #586069;
+      --card-bg: #161c28;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background: var(--bg-dark);
+      color: var(--text-main);
+      font-family: 'Outfit', -apple-system, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Header */
+    header {
+      background: var(--panel-bg);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--panel-border);
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #238636, #1f6feb, #a371f7);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 16px;
+      color: #fff;
+      box-shadow: 0 0 16px var(--accent-glow);
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .top-stats {
+      display: flex;
+      gap: 16px;
+    }
+
+    .stat-pill {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--panel-border);
+      border-radius: 20px;
+      padding: 4px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .stat-pill .val {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    /* Main Workspace */
+    .workspace {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 57px);
+      position: relative;
+    }
+
+    /* Canvas Area */
+    .viewport {
+      flex: 1;
+      position: relative;
+      background: radial-gradient(circle at center, #111622 0%, #080b11 100%);
+      overflow: hidden;
+      cursor: grab;
+    }
+
+    .viewport:active {
+      cursor: grabbing;
+    }
+
+    canvas {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    /* Floating Toolbar */
+    .floating-toolbar {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      background: var(--panel-bg);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+      z-index: 10;
+    }
+
+    button {
+      background: #21262d;
+      color: var(--text-main);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
+    button:hover {
+      background: #30363d;
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    button.primary {
+      background: #238636;
+      border-color: #2ea043;
+      color: white;
+      box-shadow: 0 0 12px rgba(46, 160, 67, 0.3);
+    }
+
+    button.primary:hover {
+      background: #2ea043;
+    }
+
+    select, input[type="text"] {
+      background: #161b22;
+      border: 1px solid var(--panel-border);
+      color: var(--text-main);
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+    }
+
+    select:focus, input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    input[type="range"] {
+      width: 80px;
+      accent-color: var(--accent);
+    }
+
+    /* Right Sidebar */
+    .sidebar {
+      width: 340px;
+      background: var(--panel-bg);
+      backdrop-filter: blur(16px);
+      border-left: 1px solid var(--panel-border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      z-index: 15;
+    }
+
+    .sidebar-section {
+      padding: 16px;
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    .sidebar-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Custom Sequence Builder Box */
+    .sequence-box {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .sequence-box input {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 2px;
+    }
+
+    .sequence-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .chip-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      color: var(--text-dim);
+    }
+
+    .chip-btn:hover {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* State Legend Grid */
+    .palette-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+      max-height: 380px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .palette-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+
+    .palette-item:hover, .palette-item.active {
+      background: rgba(88, 166, 255, 0.12);
+      border-color: var(--accent);
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      box-shadow: 0 0 4px rgba(0,0,0,0.5);
+    }
+
+    .item-label {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Cell Inspector Tooltip */
+    .inspector {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(18, 23, 34, 0.95);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--panel-border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 12px;
+      min-width: 240px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      z-index: 10;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+    }
+
+    .inspector .head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .inspector .meta-row {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    .inspector .meta-row span:last-child {
+      color: var(--text-main);
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">vN</div>
+      <div>
+        <div class="brand-title">Von Neumann 29-State CA</div>
+        <div class="brand-subtitle">Self-Reproducing Universal Automaton • Mesa 3.x Model</div>
+      </div>
+    </div>
+
+    <div class="top-stats">
+      <div class="stat-pill">
+        <span>Step:</span>
+        <span class="val" id="stat-step">0</span>
+      </div>
+      <div class="stat-pill">
+        <span>Active Pulses:</span>
+        <span class="val" id="stat-pulses" style="color: #49ff49;">0</span>
+      </div>
+      <div class="stat-pill">
+        <span>Non-Ground:</span>
+        <span class="val" id="stat-cells">0</span>
+      </div>
+      <div class="stat-pill">
+        <span>Sensitized:</span>
+        <span class="val" id="stat-sensitized" style="color: #ff9619;">0</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Workspace -->
+  <div class="workspace">
+
+    <!-- Floating Top Toolbar -->
+    <div class="floating-toolbar">
+      <button class="primary" id="btn-play">▶ Play</button>
+      <button id="btn-step">⏭ Step</button>
+      <button id="btn-reset">⟲ Reset</button>
+
+      <div class="slider-group">
+        <span>Speed:</span>
+        <input type="range" id="slider-speed" min="1" max="60" value="15">
+        <span id="speed-label" style="font-family: monospace;">15 fps</span>
+      </div>
+
+      <select id="select-pattern">
+        <option value="">Loading presets...</option>
+      </select>
+
+      <button id="btn-zoom-in">+</button>
+      <button id="btn-zoom-out">−</button>
+      <button id="btn-zoom-fit">Fit</button>
+    </div>
+
+    <!-- Viewport with Interactive Canvas -->
+    <div class="viewport" id="viewport">
+      <canvas id="ca-canvas"></canvas>
+
+      <!-- Inspector Tooltip -->
+      <div class="inspector" id="inspector" style="opacity: 0;">
+        <div class="head">
+          <div class="swatch" id="insp-swatch"></div>
+          <span id="insp-name">State Name</span>
+        </div>
+        <div class="meta-row">
+          <span>Coordinates:</span>
+          <span id="insp-coord">(0, 0)</span>
+        </div>
+        <div class="meta-row">
+          <span>Category:</span>
+          <span id="insp-cat">Ground</span>
+        </div>
+        <div class="meta-row">
+          <span>Excited:</span>
+          <span id="insp-excited">No</span>
+        </div>
+        <div style="margin-top: 6px; font-size: 11px; color: var(--text-dim);" id="insp-desc">Description</div>
+      </div>
+    </div>
+
+    <!-- Right Control Sidebar -->
+    <div class="sidebar">
+
+      <!-- Construction Arm Generator Section -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">
+          <span>Pulse Sequence Builder</span>
+        </div>
+        <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 8px;">
+          Type a binary pulse sequence to synthesize target components at the arm tip:
+        </div>
+        <div class="sequence-box">
+          <input type="text" id="input-sequence" value="1011" maxlength="12" placeholder="e.g. 1011">
+          <button class="primary" id="btn-build-arm">Build</button>
+        </div>
+        <div class="sequence-presets">
+          <button class="chip-btn" data-seq="1011">1011 (Arm +1 East)</button>
+          <button class="chip-btn" data-seq="10000">10000 (OT East)</button>
+          <button class="chip-btn" data-seq="10001">10001 (OT North)</button>
+          <button class="chip-btn" data-seq="1001">1001 (OT West)</button>
+          <button class="chip-btn" data-seq="1010">1010 (OT South)</button>
+          <button class="chip-btn" data-seq="1111">1111 (Confluent C)</button>
+          <button class="chip-btn" data-seq="1100">1100 (ST North)</button>
+        </div>
+      </div>
+
+      <!-- State Palette / Drawing Brush -->
+      <div class="sidebar-section" style="flex: 1;">
+        <div class="sidebar-title">
+          <span>29-State Palette & Brush</span>
+          <span id="brush-label" style="font-size: 11px; color: var(--accent);">Brush: U</span>
+        </div>
+        <div class="palette-grid" id="palette-container">
+          <!-- Populated dynamically via /api/states -->
+        </div>
+      </div>
+
+      <!-- Theory Explanation -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">Universal Construction</div>
+        <div style="font-size: 12px; color: var(--text-dim); line-height: 1.5;">
+          Von Neumann proved that a 29-state cellular automaton with a 5-cell neighborhood can build 
+          arbitrary Turing machines and replicate itself using a description tape and universal construction arm.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // State & Config
+    let statesMeta = {};
+    let currentSnapshot = { step: 0, width: 35, height: 35, cells: {} };
+    let isPlaying = false;
+    let playInterval = null;
+    let fps = 15;
+    let selectedBrush = 0; // Ground default
+
+    // Canvas & View transform
+    const canvas = document.getElementById('ca-canvas');
+    const ctx = canvas.getContext('2d');
+    const viewport = document.getElementById('viewport');
+    let cellSize = 22;
+    let panX = 40;
+    let panY = 80;
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+
+    // Hover inspector
+    let hoveredCell = null;
+    const inspector = document.getElementById('inspector');
+
+    function resizeCanvas() {
+      canvas.width = viewport.clientWidth * window.devicePixelRatio;
+      canvas.height = viewport.clientHeight * window.devicePixelRatio;
+      canvas.style.width = viewport.clientWidth + 'px';
+      canvas.style.height = viewport.clientHeight + 'px';
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      render();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // Fetch initial metadata
+    async function init() {
+      // Load states
+      const resStates = await fetch('/api/states');
+      const states = await resStates.json();
+      const paletteContainer = document.getElementById('palette-container');
+
+      states.forEach(st => {
+        statesMeta[st.code] = st;
+        const div = document.createElement('div');
+        div.className = `palette-item ${st.code === selectedBrush ? 'active' : ''}`;
+        div.dataset.code = st.code;
+        div.innerHTML = `
+          <div class="swatch" style="background: ${st.color};"></div>
+          <div class="item-label">${st.code}: ${st.name}</div>
+        `;
+        div.addEventListener('click', () => {
+          document.querySelectorAll('.palette-item').forEach(el => el.classList.remove('active'));
+          div.classList.add('active');
+          selectedBrush = st.code;
+          document.getElementById('brush-label').textContent = `Brush: ${st.name}`;
+        });
+        paletteContainer.appendChild(div);
+      });
+
+      // Load presets
+      const resPat = await fetch('/api/patterns');
+      const patterns = await resPat.json();
+      const select = document.getElementById('select-pattern');
+      select.innerHTML = '';
+      patterns.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.key;
+        opt.textContent = p.name;
+        select.appendChild(opt);
+      });
+      select.value = 'construction_arm_1011';
+
+      resizeCanvas();
+      await fetchSnapshot();
+      fitView();
+    }
+
+    async function fetchSnapshot() {
+      try {
+        const res = await fetch('/api/snapshot');
+        currentSnapshot = await res.json();
+        updateStats();
+        render();
+      } catch (err) {
+        console.error("Snapshot error:", err);
+      }
+    }
+
+    async function stepSimulation(count = 1) {
+      try {
+        const res = await fetch('/api/step', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count })
+        });
+        currentSnapshot = await res.json();
+        updateStats();
+        render();
+      } catch (err) {
+        console.error("Step error:", err);
+      }
+    }
+
+    function updateStats() {
+      document.getElementById('stat-step').textContent = currentSnapshot.step;
+      if (currentSnapshot.metrics) {
+        document.getElementById('stat-pulses').textContent = currentSnapshot.metrics.active_pulses;
+        document.getElementById('stat-cells').textContent = currentSnapshot.metrics.non_ground;
+        document.getElementById('stat-sensitized').textContent = currentSnapshot.metrics.sensitized;
+      }
+    }
+
+    function fitView() {
+      const vW = viewport.clientWidth;
+      const vH = viewport.clientHeight;
+      const gW = currentSnapshot.width || 35;
+      const gH = currentSnapshot.height || 35;
+
+      cellSize = Math.floor(Math.min((vW - 120) / gW, (vH - 120) / gH));
+      cellSize = Math.max(14, Math.min(48, cellSize));
+      panX = Math.floor((vW - gW * cellSize) / 2);
+      panY = Math.floor((vH - gH * cellSize) / 2);
+      render();
+    }
+
+    function render() {
+      const vW = viewport.clientWidth;
+      const vH = viewport.clientHeight;
+      ctx.clearRect(0, 0, vW, vH);
+
+      const gW = currentSnapshot.width || 35;
+      const gH = currentSnapshot.height || 35;
+
+      // Draw grid background
+      ctx.fillStyle = '#0f141f';
+      ctx.fillRect(panX, panY, gW * cellSize, gH * cellSize);
+
+      // Grid lines
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x <= gW; x++) {
+        ctx.moveTo(panX + x * cellSize, panY);
+        ctx.lineTo(panX + x * cellSize, panY + gH * cellSize);
+      }
+      for (let y = 0; y <= gH; y++) {
+        ctx.moveTo(panX, panY + y * cellSize);
+        ctx.lineTo(panX + gW * cellSize, panY + y * cellSize);
+      }
+      ctx.stroke();
+
+      // Draw non-ground cells
+      const cells = currentSnapshot.cells || {};
+      for (const [key, stateCode] of Object.entries(cells)) {
+        const [x, y] = key.split(',').map(Number);
+        const meta = statesMeta[stateCode];
+        if (!meta) continue;
+
+        // Cartesian mapping: row 0 is y = gH - 1
+        const drawX = panX + x * cellSize;
+        const drawY = panY + (gH - 1 - y) * cellSize;
+
+        // Skip if off-screen
+        if (drawX + cellSize < 0 || drawX > vW || drawY + cellSize < 0 || drawY > vH) continue;
+
+        ctx.fillStyle = meta.color;
+        ctx.fillRect(drawX + 1, drawY + 1, cellSize - 2, cellSize - 2);
+
+        // Excited glow
+        if (meta.is_excited) {
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(drawX + 1, drawY + 1, cellSize - 2, cellSize - 2);
+        }
+
+        // Draw symbol if cellSize is large enough
+        if (cellSize >= 18) {
+          ctx.fillStyle = (stateCode === 0 || meta.color === '#ffff80' || meta.color === '#fffa7d' || meta.color === '#fbff00') ? '#121212' : '#ffffff';
+          ctx.font = `bold ${Math.floor(cellSize * 0.55)}px 'JetBrains Mono', monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(meta.symbol, drawX + cellSize / 2, drawY + cellSize / 2);
+        }
+      }
+
+      // Highlight hovered cell
+      if (hoveredCell && hoveredCell.x >= 0 && hoveredCell.x < gW && hoveredCell.y >= 0 && hoveredCell.y < gH) {
+        const hX = panX + hoveredCell.x * cellSize;
+        const hY = panY + (gH - 1 - hoveredCell.y) * cellSize;
+        ctx.strokeStyle = '#58a6ff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(hX, hY, cellSize, cellSize);
+      }
+    }
+
+    // Canvas Mouse Interaction (Pan & Draw)
+    viewport.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        const rect = viewport.getBoundingClientRect();
+        const mX = e.clientX - rect.left;
+        const mY = e.clientY - rect.top;
+
+        // If shift-click or space: drag. Else draw
+        if (e.shiftKey) {
+          isDragging = true;
+          dragStartX = mX - panX;
+          dragStartY = mY - panY;
+        } else {
+          // Draw cell
+          applyBrushAt(mX, mY);
+        }
+      } else if (e.button === 1 || e.button === 2) {
+        isDragging = true;
+        dragStartX = e.clientX - panX;
+        dragStartY = e.clientY - panY;
+      }
+    });
+
+    viewport.addEventListener('mousemove', (e) => {
+      const rect = viewport.getBoundingClientRect();
+      const mX = e.clientX - rect.left;
+      const mY = e.clientY - rect.top;
+
+      if (isDragging) {
+        panX = mX - dragStartX;
+        panY = mY - dragStartY;
+        render();
+        return;
+      }
+
+      // Calculate hovered grid coordinate
+      const gW = currentSnapshot.width || 35;
+      const gH = currentSnapshot.height || 35;
+      const cellX = Math.floor((mX - panX) / cellSize);
+      const cellRow = Math.floor((mY - panY) / cellSize);
+      const cellY = gH - 1 - cellRow;
+
+      if (cellX >= 0 && cellX < gW && cellY >= 0 && cellY < gH) {
+        hoveredCell = { x: cellX, y: cellY };
+        const key = `${cellX},${cellY}`;
+        const stateCode = currentSnapshot.cells[key] || 0;
+        const meta = statesMeta[stateCode] || statesMeta[0];
+
+        inspector.style.opacity = '1';
+        document.getElementById('insp-swatch').style.background = meta.color;
+        document.getElementById('insp-name').textContent = `${meta.code}: ${meta.name} (${meta.symbol})`;
+        document.getElementById('insp-coord').textContent = `(${cellX}, ${cellY})`;
+        document.getElementById('insp-cat').textContent = meta.category;
+        document.getElementById('insp-excited').textContent = meta.is_excited ? 'Yes (Active Pulse)' : 'No';
+        document.getElementById('insp-desc').textContent = meta.description;
+      } else {
+        hoveredCell = null;
+        inspector.style.opacity = '0';
+      }
+      render();
+    });
+
+    window.addEventListener('mouseup', () => { isDragging = false; });
+    viewport.addEventListener('contextmenu', e => e.preventDefault());
+
+    // Zoom on wheel
+    viewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+      const rect = viewport.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const newSize = Math.max(10, Math.min(80, Math.round(cellSize * zoomFactor)));
+      if (newSize !== cellSize) {
+        panX = mouseX - (mouseX - panX) * (newSize / cellSize);
+        panY = mouseY - (mouseY - panY) * (newSize / cellSize);
+        cellSize = newSize;
+        render();
+      }
+    });
+
+    async function applyBrushAt(mX, mY) {
+      const gW = currentSnapshot.width || 35;
+      const gH = currentSnapshot.height || 35;
+      const cellX = Math.floor((mX - panX) / cellSize);
+      const cellRow = Math.floor((mY - panY) / cellSize);
+      const cellY = gH - 1 - cellRow;
+
+      if (cellX >= 0 && cellX < gW && cellY >= 0 && cellY < gH) {
+        const res = await fetch('/api/set_cell', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x: cellX, y: cellY, state: selectedBrush })
+        });
+        currentSnapshot = await res.json();
+        updateStats();
+        render();
+      }
+    }
+
+    // Playback loop
+    function setPlaying(play) {
+      isPlaying = play;
+      const btn = document.getElementById('btn-play');
+      if (isPlaying) {
+        btn.textContent = '⏸ Pause';
+        btn.style.background = '#d29922';
+        btn.style.borderColor = '#bb8009';
+        playInterval = setInterval(() => stepSimulation(1), 1000 / fps);
+      } else {
+        btn.textContent = '▶ Play';
+        btn.style.background = '#238636';
+        btn.style.borderColor = '#2ea043';
+        clearInterval(playInterval);
+      }
+    }
+
+    // Controls listeners
+    document.getElementById('btn-play').addEventListener('click', () => setPlaying(!isPlaying));
+    document.getElementById('btn-step').addEventListener('click', () => {
+      if (isPlaying) setPlaying(false);
+      stepSimulation(1);
+    });
+    document.getElementById('btn-reset').addEventListener('click', async () => {
+      if (isPlaying) setPlaying(false);
+      const pat = document.getElementById('select-pattern').value;
+      const res = await fetch('/api/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pattern: pat })
+      });
+      currentSnapshot = await res.json();
+      updateStats();
+      fitView();
+    });
+
+    document.getElementById('select-pattern').addEventListener('change', async (e) => {
+      if (isPlaying) setPlaying(false);
+      const res = await fetch('/api/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pattern: e.target.value })
+      });
+      currentSnapshot = await res.json();
+      updateStats();
+      fitView();
+    });
+
+    document.getElementById('slider-speed').addEventListener('input', (e) => {
+      fps = parseInt(e.target.value, 10);
+      document.getElementById('speed-label').textContent = `${fps} fps`;
+      if (isPlaying) {
+        clearInterval(playInterval);
+        playInterval = setInterval(() => stepSimulation(1), 1000 / fps);
+      }
+    });
+
+    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+      cellSize = Math.min(80, Math.round(cellSize * 1.25));
+      render();
+    });
+    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+      cellSize = Math.max(10, Math.round(cellSize * 0.8));
+      render();
+    });
+    document.getElementById('btn-zoom-fit').addEventListener('click', fitView);
+
+    // Sequence builder
+    async function buildSequenceArm(seq) {
+      if (isPlaying) setPlaying(false);
+      const res = await fetch('/api/sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sequence: seq })
+      });
+      currentSnapshot = await res.json();
+      updateStats();
+      fitView();
+    }
+
+    document.getElementById('btn-build-arm').addEventListener('click', () => {
+      const seq = document.getElementById('input-sequence').value;
+      buildSequenceArm(seq);
+    });
+
+    document.querySelectorAll('.chip-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const seq = btn.dataset.seq;
+        document.getElementById('input-sequence').value = seq;
+        buildSequenceArm(seq);
+      });
+    });
+
+    // Start
+    init();
+  </script>
+</body>
+</html>

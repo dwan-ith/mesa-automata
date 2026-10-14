@@ -97,8 +97,8 @@ Mesa-von-Neumann/
 ### 1. Installation
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/mesa-von-neumann.git
-cd mesa-von-neumann
+git clone https://github.com/dwan-ith/mesa-automata.git
+cd mesa-automata
 
 # Create virtual environment and install in editable mode
 uv venv

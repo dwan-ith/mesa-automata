@@ -31,23 +31,22 @@ class CellAgent(mesa.Agent):
     def determine_next_state(self) -> None:
         """Phase 1: synchronous evaluation based on 5-cell von Neumann neighborhood."""
         x, y = self.pos
-        grid = self.model.grid
+        w, h = self.model.width, self.model.height
+        torus = self.model.grid.torus
+        cell_map = self.model.cell_map
 
-        # Von Neumann neighborhood coordinates:
-        # north: (x, y+1)
-        # east:  (x+1, y)
-        # south: (x, y-1)
-        # west:  (x-1, y)
-
-        north_cell = grid.get_cell_list_contents([(x, y + 1)]) if (grid.torus or y + 1 < grid.height) else []
-        east_cell = grid.get_cell_list_contents([(x + 1, y)]) if (grid.torus or x + 1 < grid.width) else []
-        south_cell = grid.get_cell_list_contents([(x, y - 1)]) if (grid.torus or y - 1 >= 0) else []
-        west_cell = grid.get_cell_list_contents([(x - 1, y)]) if (grid.torus or x - 1 >= 0) else []
-
-        n_val = north_cell[0].state if north_cell else VNState.U
-        e_val = east_cell[0].state if east_cell else VNState.U
-        s_val = south_cell[0].state if south_cell else VNState.U
-        w_val = west_cell[0].state if west_cell else VNState.U
+        # Von Neumann neighborhood coordinates (Mesa Cartesian, y up):
+        # north: (x, y+1), east: (x+1, y), south: (x, y-1), west: (x-1, y)
+        if torus:
+            n_val = cell_map[(x, (y + 1) % h)].state
+            e_val = cell_map[((x + 1) % w, y)].state
+            s_val = cell_map[(x, (y - 1) % h)].state
+            w_val = cell_map[((x - 1) % w, y)].state
+        else:
+            n_val = cell_map[(x, y + 1)].state if y + 1 < h else VNState.U
+            e_val = cell_map[(x + 1, y)].state if x + 1 < w else VNState.U
+            s_val = cell_map[(x, y - 1)].state if y - 1 >= 0 else VNState.U
+            w_val = cell_map[(x - 1, y)].state if x - 1 >= 0 else VNState.U
 
         self.next_state = cell_next_state(self.state, n_val, e_val, s_val, w_val)
 
@@ -103,8 +102,17 @@ class VonNeumannCA(mesa.Model):
         self.datacollector.collect(self)
 
     def count_active_pulses(self) -> int:
-        """Count cells currently in an excited state (ordinary/special transmission pulses or emitting confluent)."""
-        return sum(1 for a in self.agents if a.is_excited)
+        """Count cells currently carrying an excited pulse.
+
+        Only ordinary/special transmission excited states and emitting
+        confluent states (C10, C11) count. Sensitized intermediates (S..S000)
+        are construction transients, not pulses.
+        """
+        return sum(
+            1
+            for a in self.agents
+            if a.state in (13, 14, 15, 16, 21, 22, 23, 24, 26, 28)
+        )
 
     def count_non_ground_cells(self) -> int:
         """Count cells that are not in the quiescent ground state U."""

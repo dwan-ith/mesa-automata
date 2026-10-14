@@ -60,8 +60,7 @@ def test_all_nine_construction_targets(sequence: str, expected_state: VNState):
 
 
 def test_construction_arm_step_by_step_1011():
-    """Verify the exact intermediate sensitized states for sequence 1011."""
-    # Step 0: Target is Ground U
+    """Verify the exact intermediate sensitized states for sequence 1011."""    # Step 0: Target is Ground U
     state = VNState.U
 
     # Pulse 1: U -> S

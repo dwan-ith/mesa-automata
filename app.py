@@ -1,16 +1,26 @@
-"""Canonical Mesa 3.x Solara visualization application.
+"""Mesa Solara visualization application (optional).
+
+Requires the `viz` extra:
+
+    pip install -e ".[viz]"
 
 Run with:
     solara run app.py
 """
 
 from typing import Dict, Any
-from mesa.visualization import (
-    SolaraViz,
-    make_space_component,
-    make_plot_component,
-    Slider,
-)
+
+try:
+    from mesa.visualization import (
+        SolaraViz,
+        make_space_component,
+        make_plot_component,
+        Slider,
+    )
+except ImportError as exc:  # pragma: no cover - optional dependency
+    raise ImportError(
+        "Solara visualization requires the 'viz' extra: pip install -e \".[viz]\""
+    ) from exc
 
 from vn_automata.model import VonNeumannCA
 from vn_automata.states import VNState, STATE_INFO

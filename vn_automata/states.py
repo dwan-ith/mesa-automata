@@ -94,7 +94,7 @@ STATE_INFO = {
         (48, 48, 48), "#303030", "Ground (unexcitable background space)"
     ),
     VNState.S: StateMetadata(
-        1, "S", "S", StateCategory.SENSITIZED, Direction.NONE, True,
+        1, "S", "S", StateCategory.SENSITIZED, Direction.NONE, False,
         (255, 0, 0), "#ff0000", "Sensitized (newly sensitized from U)"
     ),
     VNState.S0: StateMetadata(
@@ -102,7 +102,7 @@ STATE_INFO = {
         (255, 125, 0), "#ff7d00", "Sensitized (after pulse 0)"
     ),
     VNState.S1: StateMetadata(
-        3, "S1", "S₁", StateCategory.SENSITIZED, Direction.NONE, True,
+        3, "S1", "S₁", StateCategory.SENSITIZED, Direction.NONE, False,
         (255, 150, 25), "#ff9619", "Sensitized (after pulse 1)"
     ),
     VNState.S00: StateMetadata(
@@ -110,7 +110,7 @@ STATE_INFO = {
         (255, 175, 50), "#ffaf32", "Sensitized (after pulse 00)"
     ),
     VNState.S01: StateMetadata(
-        5, "S01", "S₀₁", StateCategory.SENSITIZED, Direction.NONE, True,
+        5, "S01", "S₀₁", StateCategory.SENSITIZED, Direction.NONE, False,
         (255, 200, 75), "#ffc84b", "Sensitized (after pulse 01)"
     ),
     VNState.S10: StateMetadata(
@@ -118,7 +118,7 @@ STATE_INFO = {
         (255, 255, 100), "#ffff64", "Sensitized (after pulse 10)"
     ),
     VNState.S11: StateMetadata(
-        7, "S11", "S₁₁", StateCategory.SENSITIZED, Direction.NONE, True,
+        7, "S11", "S₁₁", StateCategory.SENSITIZED, Direction.NONE, False,
         (255, 250, 125), "#fffa7d", "Sensitized (after pulse 11)"
     ),
     VNState.S000: StateMetadata(

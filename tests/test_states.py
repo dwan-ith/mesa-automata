@@ -54,3 +54,31 @@ def test_directional_properties():
     assert STATE_INFO[VNState.ST_N].direction == Direction.NORTH
     assert STATE_INFO[VNState.ST_W].direction == Direction.WEST
     assert STATE_INFO[VNState.ST_S].direction == Direction.SOUTH
+
+
+def test_sensitized_not_counted_as_excited():
+    """Sensitized intermediates are construction transients, not pulses."""
+    for s in (VNState.S, VNState.S0, VNState.S1, VNState.S00, VNState.S01,
+              VNState.S10, VNState.S11, VNState.S000):
+        assert STATE_INFO[s].is_excited is False
+
+
+def test_loader_roundtrip_all_states():
+    """Every state must survive export -> parse round-trip."""
+    from vn_automata.loader import parse_ascii_pattern, export_to_ascii
+
+    pattern = {(x, 0): VNState(x) for x in range(29) if x != VNState.U}
+    text = export_to_ascii(pattern, 29, 1)
+    back = parse_ascii_pattern(text)
+    assert back == pattern
+
+
+def test_loader_strict_rejects_unknown():
+    """Strict parsing must reject unknown chars; default skips them (ground)."""
+    import pytest
+    from vn_automata.loader import parse_ascii_pattern
+    from vn_automata.states import VNState
+
+    assert parse_ascii_pattern("r?r") == {(0, 0): VNState.OT_E, (2, 0): VNState.OT_E}
+    with pytest.raises(ValueError):
+        parse_ascii_pattern("r?r", strict=True)

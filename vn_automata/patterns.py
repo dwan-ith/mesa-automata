@@ -15,6 +15,8 @@ from .states import VNState
 
 def make_pulse_loop(x: int = 10, y: int = 10, width: int = 6, height: int = 6) -> Dict[Tuple[int, int], int]:
     """Create a rectangular ordinary transmission loop with a single circulating pulse."""
+    if width < 3 or height < 3:
+        raise ValueError(f"Loop must be at least 3x3, got {width}x{height}")
     pattern: Dict[Tuple[int, int], int] = {}
 
     # Bottom edge (East)
@@ -152,18 +154,30 @@ def make_programmable_builder(
     sequence: str,
     x: int = 5,
     y: int = 15,
+    max_len: int = 32,
 ) -> Dict[Tuple[int, int], int]:
     """Construct an arm with any custom binary sequence (e.g., '1011', '10000', '1111').
-    
+
     The sequence is ordered chronologically (first bit arrives first).
+
+    Raises:
+        ValueError: if sequence is empty, exceeds max_len, or contains chars
+            other than '0'/'1'.
     """
+    seq = sequence.strip()
+    if not seq:
+        raise ValueError("Sequence must not be empty")
+    if len(seq) > max_len:
+        raise ValueError(f"Sequence too long ({len(seq)} > {max_len})")
+    if any(bit not in ("0", "1") for bit in seq):
+        raise ValueError(f"Sequence must be binary ('0'/'1' only), got {sequence!r}")
     pattern: Dict[Tuple[int, int], int] = {}
-    n = len(sequence)
+    n = len(seq)
 
     # Place wire leading up to tip
     # sequence[0] should be at the tip (x + n, y)
     # sequence[1] at (x + n - 1, y), etc.
-    for i, bit in enumerate(sequence):
+    for i, bit in enumerate(seq):
         pos_x = x + (n - 1 - i)
         is_1 = (bit == "1")
         pattern[(pos_x, y)] = VNState.ST_E_EX if is_1 else VNState.ST_E

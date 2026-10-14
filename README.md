@@ -14,7 +14,9 @@ While Conway's *Game of Life* (1970) later demonstrated that simple 2-state loca
 - **Universal Constructor (Ribosome/Arm):** A machine capable of reading any blueprint tape and mechanically constructing the specified structure in empty cell space.
 - **Universal Copier:** A mechanism that duplicates the description tape and attaches it to the offspring, avoiding the infinite regress paradox.
 
-This repository provides a canonical, clean Python/Mesa implementation of the complete 29-state rule-set, demonstrator patterns, test validation suite, and an interactive real-time visualizer.
+This repository provides a Python/Mesa implementation of the 29-state rule-set, transmission/construction demonstrator patterns, test validation suite, and an interactive real-time visualizer.
+
+> Scope note: this covers the verified transmission rules, confluent logic, antagonistic erasure, and single-cell synthesis via the sensitized tree (the 9 canonical pulse sequences). A full universal constructor + tape + self-replicating configuration (100k+ cells, never completely specified in the literature) is out of scope.
 
 ---
 
@@ -69,8 +71,8 @@ Mesa-von-Neumann/
 ├── CONTRIBUTING.md             # Contribution guidelines
 ├── run_visualization.py        # CLI entry point to launch interactive visualizer
 ├── vn_automata/
-│   ├── states.py               # Enum of 29 states, metadata, symbols, and canonical colors
-│   ├── rules.py                # Pure, deterministic transition functions & NumPy kernel
+│   ├── states.py               # Enum of 29 states, metadata, symbols, and colors
+│   ├── rules.py                # Pure, deterministic transition functions & Numba-accelerated kernel
 │   ├── model.py                # Mesa 3.x Model (VonNeumannCA) and CellAgent
 │   ├── patterns.py             # Presets: Pulse loop, Confluent splitter, 1011 arm, Erasure
 │   ├── loader.py               # ASCII / RLE format parser and serializer
@@ -108,7 +110,7 @@ uv pip install -e ".[dev]"
 ```bash
 pytest -v
 ```
-All 24 unit and integration tests validate the 29-state space, signal transmission, confluent delay/splitting, antagonistic erasure, and pulse-train synthesis across all 9 target states.
+All 30+ unit and integration tests validate the 29-state space, signal transmission (E/W/N/S), confluent delay/splitting, antagonistic erasure, pulse-train synthesis across all 9 target states, `step_grid`/model parity, torus wrapping, loader round-trips, and input validation.
 
 ### 3. Launch the Interactive Visualizer
 ```bash

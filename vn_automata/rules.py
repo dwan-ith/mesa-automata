@@ -12,6 +12,18 @@ from typing import Tuple
 import numpy as np
 from .states import VNState
 
+try:
+    from numba import njit as _njit
+    _HAS_NUMBA = True
+except ImportError:  # pragma: no cover - optional acceleration
+    _HAS_NUMBA = False
+
+    def _njit(*a, **k):
+        def wrap(f):
+            return f
+
+        return wrap if a and callable(a[0]) else wrap
+
 
 # Directions relative to center (x, y):
 # north: (x, y+1)
@@ -255,28 +267,176 @@ def step_grid(grid: np.ndarray, torus: bool = False) -> np.ndarray:
     new_grid = np.zeros_like(grid)
 
     if torus:
+        # np.roll(shift=-1) moves row y+1 into row y, i.e. the north
+        # neighbor (x, y+1) in Mesa Cartesian coordinates where arr[y, x].
         north = np.roll(grid, shift=-1, axis=0)
         south = np.roll(grid, shift=1, axis=0)
         east = np.roll(grid, shift=-1, axis=1)
         west = np.roll(grid, shift=1, axis=1)
     else:
-        # Zero-pad boundaries (ground state outside)
+        # Zero-pad boundaries (ground state outside).
+        # padded[y + 1, x + 1] == grid[y, x], so:
+        #   north (x, y+1) -> padded row y+2 -> padded[2:, :]
+        #   south (x, y-1) -> padded row y   -> padded[:-2, :]
         padded = np.pad(grid, 1, mode="constant", constant_values=VNState.U)
-        north = padded[:-2, 1:-1]
-        south = padded[2:, 1:-1]
+        north = padded[2:, 1:-1]
+        south = padded[:-2, 1:-1]
         west = padded[1:-1, :-2]
         east = padded[1:-1, 2:]
 
-    # Apply vectorized cell transitions or point-by-point
-    # For correctness and clarity across all 29 states:
-    for y in range(height):
-        for x in range(width):
-            new_grid[y, x] = cell_next_state(
-                grid[y, x],
-                north[y, x],
-                east[y, x],
-                south[y, x],
-                west[y, x],
-            )
+    # Apply transitions: Numba-compiled kernel when available (same rules as
+    # cell_next_state, plain ints so njit can compile it), else Python loops.
+    if _HAS_NUMBA:
+        _step_kernel_nb(grid, north, east, south, west, new_grid)
+    else:
+        for y in range(height):
+            for x in range(width):
+                new_grid[y, x] = cell_next_state(
+                    grid[y, x],
+                    north[y, x],
+                    east[y, x],
+                    south[y, x],
+                    west[y, x],
+                )
 
     return new_grid
+
+
+@_njit(cache=True)
+def _step_kernel_nb(grid, north, east, south, west, out):
+    """Numba fast path mirroring cell_next_state with int state codes."""
+    h, w = grid.shape
+    for y in range(h):
+        for x in range(w):
+            c = grid[y, x]
+            n = north[y, x]
+            e = east[y, x]
+            s = south[y, x]
+            ww = west[y, x]
+
+            # 1. Ground
+            if c == 0:
+                out[y, x] = 1 if (
+                    ww == 13 or ww == 21
+                    or s == 14 or s == 22
+                    or e == 15 or e == 23
+                    or n == 16 or n == 24
+                ) else 0
+                continue
+
+            # 2. Sensitized 1..8
+            if 1 <= c <= 8:
+                inp = 1 if (
+                    ww == 13 or ww == 21
+                    or s == 14 or s == 22
+                    or e == 15 or e == 23
+                    or n == 16 or n == 24
+                ) else 0
+                if c == 1:
+                    out[y, x] = 3 if inp else 2
+                elif c == 2:
+                    out[y, x] = 5 if inp else 4
+                elif c == 3:
+                    out[y, x] = 7 if inp else 6
+                elif c == 4:
+                    out[y, x] = 11 if inp else 8
+                elif c == 5:
+                    out[y, x] = 17 if inp else 12
+                elif c == 6:
+                    out[y, x] = 19 if inp else 18
+                elif c == 7:
+                    out[y, x] = 25 if inp else 20
+                else:
+                    out[y, x] = 10 if inp else 9
+                continue
+
+            # 3. Ordinary transmission 9..16
+            if 9 <= c <= 16:
+                # STS destruction
+                if ww == 21 or s == 22 or e == 23 or n == 24:
+                    out[y, x] = 0
+                    continue
+                if c == 9 or c == 13:
+                    base = 9
+                    direction = 1
+                elif c == 10 or c == 14:
+                    base = 10
+                    direction = 2
+                elif c == 11 or c == 15:
+                    base = 11
+                    direction = 3
+                else:
+                    base = 12
+                    direction = 4
+                excited = False
+                if direction != 3 and (ww == 13 or ww == 26 or ww == 28):
+                    excited = True
+                if not excited and direction != 4 and (s == 14 or s == 26 or s == 28):
+                    excited = True
+                if not excited and direction != 1 and (e == 15 or e == 26 or e == 28):
+                    excited = True
+                if not excited and direction != 2 and (n == 16 or n == 26 or n == 28):
+                    excited = True
+                out[y, x] = base + 4 if excited else base
+                continue
+
+            # 4. Special transmission 17..24
+            if 17 <= c <= 24:
+                if ww == 13 or s == 14 or e == 15 or n == 16:
+                    out[y, x] = 0
+                    continue
+                if c == 17 or c == 21:
+                    base = 17
+                    direction = 1
+                elif c == 18 or c == 22:
+                    base = 18
+                    direction = 2
+                elif c == 19 or c == 23:
+                    base = 19
+                    direction = 3
+                else:
+                    base = 20
+                    direction = 4
+                excited = False
+                if direction != 3 and (ww == 21 or ww == 26 or ww == 28):
+                    excited = True
+                if not excited and direction != 4 and (s == 22 or s == 26 or s == 28):
+                    excited = True
+                if not excited and direction != 1 and (e == 23 or e == 26 or e == 28):
+                    excited = True
+                if not excited and direction != 2 and (n == 24 or n == 26 or n == 28):
+                    excited = True
+                out[y, x] = base + 4 if excited else base
+                continue
+
+            # 5. Confluent 25..28
+            if 25 <= c <= 28:
+                if ww == 21 or s == 22 or e == 23 or n == 24:
+                    out[y, x] = 0
+                    continue
+                nlines = 0
+                elines = 0
+                if ww == 9 or ww == 13:
+                    nlines += 1
+                    if ww == 13:
+                        elines += 1
+                if s == 10 or s == 14:
+                    nlines += 1
+                    if s == 14:
+                        elines += 1
+                if e == 11 or e == 15:
+                    nlines += 1
+                    if e == 15:
+                        elines += 1
+                if n == 12 or n == 16:
+                    nlines += 1
+                    if n == 16:
+                        elines += 1
+                inp = 1 if (nlines > 0 and elines == nlines) else 0
+                if c == 25 or c == 26:
+                    out[y, x] = 27 if inp else 25
+                else:
+                    out[y, x] = 28 if inp else 26
+                continue
+
+            out[y, x] = 0

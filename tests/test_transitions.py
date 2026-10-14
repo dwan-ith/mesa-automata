@@ -118,3 +118,83 @@ def test_antagonistic_destruction_sts_erases_confluent():
         west=VNState.ST_E_EX,
     )
     assert next_st == VNState.U
+
+
+def test_north_south_wire_propagation():
+    """Regression: N/S wires must propagate (catches step_grid N/S swap)."""
+    # North-pointing wire fed from the south
+    assert (
+        cell_next_state(VNState.OT_N, VNState.U, VNState.U, VNState.OT_N_EX, VNState.U)
+        == VNState.OT_N_EX
+    )
+    # South-pointing wire fed from the north
+    assert (
+        cell_next_state(VNState.OT_S, VNState.OT_S_EX, VNState.U, VNState.U, VNState.U)
+        == VNState.OT_S_EX
+    )
+
+
+def test_step_grid_matches_single_cell_rule_all_directions():
+    """step_grid must agree with cell_next_state for E/W/N/S pulses."""
+    # Vertical wire: pulse at south (row 1) feeding center (row 2)
+    g = np.full((5, 5), VNState.U, dtype=np.int32)
+    g[1, 2] = VNState.OT_N_EX
+    g[2, 2] = VNState.OT_N
+    g2 = step_grid(g, torus=False)
+    assert g2[2, 2] == VNState.OT_N_EX
+
+    # Horizontal wire: pulse at west feeding center
+    g = np.full((5, 5), VNState.U, dtype=np.int32)
+    g[2, 1] = VNState.OT_E_EX
+    g[2, 2] = VNState.OT_E
+    g2 = step_grid(g, torus=False)
+    assert g2[2, 2] == VNState.OT_E_EX
+
+
+def test_step_grid_torus_wraps():
+    """Torus mode must wrap pulses across edges."""
+    g = np.full((4, 4), VNState.U, dtype=np.int32)
+    # Pulse at x=3 (east edge) pointing east wraps to x=0 ground
+    g[2, 3] = VNState.OT_E_EX
+    g2 = step_grid(g, torus=True)
+    # Ground at (2, 0) has a wrapped west neighbor pointing east -> sensitized
+    assert g2[2, 0] == VNState.S
+
+
+def test_step_kernel_matches_reference_on_random_grids():
+    """Accelerated kernel must match cell_next_state on randomized states."""
+    rng = np.random.default_rng(42)
+    for torus in (False, True):
+        for _ in range(3):
+            g = rng.integers(0, 29, size=(10, 12)).astype(np.int32)
+            got = step_grid(g, torus=torus)
+            # Reference: per-cell Python evaluation with matching neighborhoods
+            if torus:
+                n = np.roll(g, -1, axis=0)
+                s = np.roll(g, 1, axis=0)
+                e = np.roll(g, -1, axis=1)
+                w = np.roll(g, 1, axis=1)
+            else:
+                p = np.pad(g, 1, constant_values=VNState.U)
+                n, s, w, e = p[2:, 1:-1], p[:-2, 1:-1], p[1:-1, :-2], p[1:-1, 2:]
+            for y in range(g.shape[0]):
+                for x in range(g.shape[1]):
+                    assert got[y, x] == cell_next_state(
+                        int(g[y, x]), int(n[y, x]), int(e[y, x]),
+                        int(s[y, x]), int(w[y, x]),
+                    )
+
+
+def test_pattern_validation():
+    """Invalid builder inputs must raise, not silently produce garbage."""
+    import pytest
+    from vn_automata.patterns import make_programmable_builder, make_pulse_loop
+
+    with pytest.raises(ValueError):
+        make_programmable_builder("")
+    with pytest.raises(ValueError):
+        make_programmable_builder("10a01")
+    with pytest.raises(ValueError):
+        make_programmable_builder("1" * 33)
+    with pytest.raises(ValueError):
+        make_pulse_loop(0, 0, 2, 2)

@@ -29,39 +29,44 @@ class SimulationState:
             if pattern_key:
                 self.pattern_key = pattern_key
             if width:
-                self.width = width
+                self.width = max(5, min(int(width), 200))
             if height:
-                self.height = height
-
-            pattern_info = PATTERNS.get(self.pattern_key)
-            w = self.width
-            h = self.height
-            if pattern_info:
-                w = max(w, pattern_info.get("width", 35))
-                h = max(h, pattern_info.get("height", 35))
-
-            self.width = w
-            self.height = h
+                self.height = max(5, min(int(height), 200))
 
             pat = get_pattern(self.pattern_key) if self.pattern_key in PATTERNS else {}
-            self.model = VonNeumannCA(width=w, height=h, initial_pattern=pat)
+            # Expand only if the pattern itself would be clipped, never force
+            # a minimum size on the user.
+            if pat:
+                need_w = max(px for px, _ in pat) + 2
+                need_h = max(py for _, py in pat) + 2
+                self.width = max(self.width, min(need_w, 200))
+                self.height = max(self.height, min(need_h, 200))
+
+            self.model = VonNeumannCA(width=self.width, height=self.height, initial_pattern=pat)
 
     def step(self, n: int = 1):
         with self.lock:
             if self.model:
-                for _ in range(max(1, n)):
+                for _ in range(max(1, min(int(n), 1000))):
                     self.model.step()
 
     def set_cell(self, x: int, y: int, state: int):
         with self.lock:
             if self.model:
-                self.model.set_cell(x, y, state)
+                if not (0 <= int(state) <= 28):
+                    raise ValueError(f"State must be 0..28, got {state}")
+                self.model.set_cell(int(x), int(y), int(state))
 
     def load_sequence_arm(self, sequence: str):
+        seq = (sequence or "").strip()
+        if not seq or any(b not in ("0", "1") for b in seq):
+            raise ValueError("Sequence must be binary ('0'/'1' only)")
+        if len(seq) > 32:
+            raise ValueError("Sequence too long (max 32 bits)")
         with self.lock:
-            pat = make_programmable_builder(sequence, x=8, y=self.height // 2)
-            self.model = VonNeumannCA(width=max(self.width, len(sequence) + 20), height=self.height, initial_pattern=pat)
-            self.pattern_key = f"Custom Sequence: {sequence}"
+            pat = make_programmable_builder(seq, x=8, y=self.height // 2)
+            self.model = VonNeumannCA(width=max(self.width, len(seq) + 20), height=self.height, initial_pattern=pat)
+            self.pattern_key = f"Custom Sequence: {seq}"
 
     def get_snapshot(self) -> Dict[str, Any]:
         with self.lock:
@@ -142,20 +147,39 @@ class VNApiHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(SIMULATION.get_snapshot())
         elif url.path == "/api/reset":
             pattern = payload.get("pattern", "construction_arm_1011")
+            if pattern not in PATTERNS:
+                self.send_error_json(400, f"Unknown pattern {pattern!r}")
+                return
             SIMULATION.reset(pattern)
             self.send_json(SIMULATION.get_snapshot())
         elif url.path == "/api/set_cell":
-            x = int(payload.get("x", 0))
-            y = int(payload.get("y", 0))
-            state = int(payload.get("state", 0))
-            SIMULATION.set_cell(x, y, state)
+            try:
+                x = int(payload.get("x", 0))
+                y = int(payload.get("y", 0))
+                state = int(payload.get("state", 0))
+                SIMULATION.set_cell(x, y, state)
+            except (ValueError, TypeError) as exc:
+                self.send_error_json(400, str(exc))
+                return
             self.send_json(SIMULATION.get_snapshot())
         elif url.path == "/api/sequence":
-            seq = payload.get("sequence", "1011").strip()
-            SIMULATION.load_sequence_arm(seq)
+            seq = str(payload.get("sequence", "1011")).strip()
+            try:
+                SIMULATION.load_sequence_arm(seq)
+            except (ValueError, TypeError) as exc:
+                self.send_error_json(400, str(exc))
+                return
             self.send_json(SIMULATION.get_snapshot())
         else:
             self.send_error(404, "Unknown API endpoint")
+
+    def send_error_json(self, code: int, message: str):
+        body = json.dumps({"error": message}).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def send_json(self, data: Any):
         body = json.dumps(data).encode("utf-8")

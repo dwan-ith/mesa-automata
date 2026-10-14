@@ -22,12 +22,17 @@ dependencies = [
     "mesa>=3.0.0",
     "numpy>=1.24.0",
     "pandas>=2.0.0",
-    "networkx>=3.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+]
+viz = [
+    "solara>=1.0",
+]
+accelerate = [
+    "numba>=0.57",
 ]
 
 [tool.pytest.ini_options]

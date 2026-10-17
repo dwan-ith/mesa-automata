@@ -93,8 +93,6 @@ Golly patterns load here and vice versa.
 Mesa-von-Neumann/
 ├── pyproject.toml              # Build & dependency metadata
 ├── README.md                   # Complete architectural guide
-├── PROPOSAL.md                 # Upstream proposal for projectmesa/mesa-examples
-├── CONTRIBUTING.md             # Contribution guidelines
 ├── run_visualization.py        # CLI entry point to launch interactive visualizer
 ├── vn_automata/
 │   ├── states.py               # The 29 states, metadata, colours, functional groups

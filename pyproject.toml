@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mesa-von-neumann"
-version = "0.1.0"
+version = "0.2.0"
 description = "Von Neumann's 29-State Self-Reproducing Cellular Automaton in Mesa"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Antigravity Mesa Contributors"}
+    {name = "dwan-ith"}
 ]
 keywords = ["cellular-automata", "mesa", "agent-based-modeling", "von-neumann", "self-replication"]
 classifiers = [
@@ -27,13 +27,18 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+    # numba is optional: it only accelerates the exhaustive golden test.
+    "numba>=0.57",
 ]
 viz = [
     "solara>=1.0",
 ]
-accelerate = [
-    "numba>=0.57",
-]
+
+[tool.setuptools.packages.find]
+include = ["vn_automata*"]
+
+[tool.setuptools.package-data]
+vn_automata = ["data/*.rule", "data/*.md", "visualizer/static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

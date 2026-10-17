@@ -70,7 +70,7 @@ class VonNeumannCA(mesa.Model):
         initial_pattern: Optional[Dict[Tuple[int, int], int]] = None,
         seed: Optional[int] = None,
     ) -> None:
-        super().__init__(seed=seed)
+        super().__init__(rng=seed)
         self.width = width
         self.height = height
         self.torus = torus
@@ -104,15 +104,12 @@ class VonNeumannCA(mesa.Model):
     def count_active_pulses(self) -> int:
         """Count cells currently carrying an excited pulse.
 
-        Only ordinary/special transmission excited states and emitting
-        confluent states (C10, C11) count. Sensitized intermediates (S..S000)
-        are construction transients, not pulses.
+        Derived from state metadata (``StateMetadata.is_excited``): excited
+        ordinary/special transmission cells plus the emitting confluent states
+        C10/C11. Sensitized intermediates are construction transients, not
+        pulses, and deliberately do not count.
         """
-        return sum(
-            1
-            for a in self.agents
-            if a.state in (13, 14, 15, 16, 21, 22, 23, 24, 26, 28)
-        )
+        return sum(1 for a in self.agents if a.is_excited)
 
     def count_non_ground_cells(self) -> int:
         """Count cells that are not in the quiescent ground state U."""

@@ -21,6 +21,11 @@ pytest -v
 
 When adding new transition rules or patterns, please include corresponding unit tests in `tests/`.
 
+Any change to the transition function must keep `tests/test_golden_golly.py`
+passing: these tests assert exact agreement with the canonical Golly
+`JvN29.rule` table over the complete 29^5 state-transition space, so they are
+the authority for rule changes.
+
 ## Code Style
 
 - Follow PEP 8 guidelines.

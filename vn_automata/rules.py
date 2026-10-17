@@ -1,442 +1,245 @@
-"""Deterministic, synchronous transition rules for von Neumann's 29-state CA.
+"""Von Neumann's 29-state transition function, *generated* from the model.
 
-Implements the exact 5-cell neighborhood rules:
-- Ground excitation into Sensitized tree (S)
-- Sensitized bifurcation tree (S -> S0/S1 -> S00/S01/S10/S11 -> target quiescent states)
-- Ordinary Transmission States (OTS): directional pulse transfer, confluent input, STS destruction
-- Special Transmission States (STS): directional pulse transfer, confluent input, OTS destruction
-- Confluent States (C): 2-bit delay buffer, OTS AND-gate input, multi-line fan-out, STS destruction
+Rather than hand-writing one branch per state (which is how the automaton is
+usually transcribed, and how it was previously implemented here), this module
+*describes* the automaton in terms of von Neumann's own concepts and lets
+:mod:`vn_automata.engine` compile that description into a lookup table.
+
+The vocabulary is directional. An ordinary/special transmission cell "points"
+at one of its four neighbours; an excited transmission cell injects its pulse
+into the neighbour it points at. So, for a cell, the only neighbours that can
+feed it are those whose direction points *at* it, i.e. a neighbour on side
+``s`` must have direction ``opposite(s)``.
+
+From that single idea the whole rule set follows:
+
+* **Ground** becomes sensitized when any neighbour injects an excited pulse.
+* **Sensitized** cells walk a binary decision tree (``S -> S0/S1 -> ...``),
+  branching on whether an excited pulse arrives this tick, until they settle
+  into one of the nine functional states.
+* **Transmission** cells (ordinary and special) are mutually antagonistic:
+  an excited pulse of the *other* family erases the cell to ground. Otherwise
+  they relay an incoming pulse one cell onward (they are fed by any neighbour
+  except the one they point at) and relax to quiescent when no pulse arrives.
+* **Confluent** cells are 2-bit delay buffers / AND gates. They sample the set
+  of ordinary-transmission lines pointing at them and emit to all four
+  neighbours only when *every* such line is excited and at least one exists.
+
+The generated rule set is checked, over the entire neighbourhood space, against
+the canonical Golly ``JvN29.rule`` table — see ``tests/test_golden_golly.py``.
 """
 
-from typing import Tuple
+from __future__ import annotations
+
+from typing import Dict, FrozenSet, Mapping, Optional, Tuple
+
 import numpy as np
-from .states import VNState
 
-try:
-    from numba import njit as _njit
-    _HAS_NUMBA = True
-except ImportError:  # pragma: no cover - optional acceleration
-    _HAS_NUMBA = False
+from .engine import RuleSet, TableAutomaton
+from .states import (
+    CONFLUENT,
+    CONFLUENT_EMITTING,
+    Direction,
+    OPPOSITE_DIRECTION,
+    OTS_EXCITED_BY_DIR,
+    OTS_QUIESCENT_BY_DIR,
+    STATE_COUNT,
+    STS_EXCITED_BY_DIR,
+    STS_QUIESCENT_BY_DIR,
+    VNState,
+)
 
-    def _njit(*a, **k):
-        def wrap(f):
-            return f
+ALL_STATES: FrozenSet[int] = frozenset(range(STATE_COUNT))
+DIRECTIONS: Tuple[Direction, ...] = (
+    Direction.EAST,
+    Direction.NORTH,
+    Direction.WEST,
+    Direction.SOUTH,
+)
 
-        return wrap if a and callable(a[0]) else wrap
+#: Neighbour position -> engine parameter name.
+_SIDE_NAME = {
+    Direction.NORTH: "north",
+    Direction.EAST: "east",
+    Direction.SOUTH: "south",
+    Direction.WEST: "west",
+}
+
+#: The sensitized bifurcation tree: state -> (branch on bit 0, branch on bit 1).
+_TREE = {
+    VNState.S: (VNState.S0, VNState.S1),
+    VNState.S0: (VNState.S00, VNState.S01),
+    VNState.S1: (VNState.S10, VNState.S11),
+    VNState.S00: (VNState.S000, VNState.OT_W),
+    VNState.S01: (VNState.OT_S, VNState.ST_E),
+    VNState.S10: (VNState.ST_N, VNState.ST_W),
+    VNState.S11: (VNState.ST_S, VNState.C00),
+    VNState.S000: (VNState.OT_E, VNState.OT_N),
+}
+
+#: Confluent 2-bit delay buffer: state -> (bit emitted now, bit buffered next).
+_CONFLUENT_BITS = {
+    VNState.C00: (0, 0),
+    VNState.C01: (0, 1),
+    VNState.C10: (1, 0),
+    VNState.C11: (1, 1),
+}
+_BITS_TO_CONFLUENT = {bits: state for state, bits in _CONFLUENT_BITS.items()}
 
 
-# Directions relative to center (x, y):
-# north: (x, y+1)
-# east:  (x+1, y)
-# south: (x, y-1)
-# west:  (x-1, y)
-
-# Excited transmission states pointing towards center:
-# A west neighbor (x-1, y) points towards center if its direction is EAST.
-# A south neighbor (x, y-1) points towards center if its direction is NORTH.
-# A east neighbor (x+1, y) points towards center if its direction is WEST.
-# A north neighbor (x, y+1) points towards center if its direction is SOUTH.
-
-OTS_EAST_EXC = VNState.OT_E_EX  # 13
-OTS_NORTH_EXC = VNState.OT_N_EX  # 14
-OTS_WEST_EXC = VNState.OT_W_EX  # 15
-OTS_SOUTH_EXC = VNState.OT_S_EX  # 16
-
-STS_EAST_EXC = VNState.ST_E_EX  # 21
-STS_NORTH_EXC = VNState.ST_N_EX  # 22
-STS_WEST_EXC = VNState.ST_W_EX  # 23
-STS_SOUTH_EXC = VNState.ST_S_EX  # 24
-
-OTS_EAST_ALL = (VNState.OT_E, VNState.OT_E_EX)  # 9, 13
-OTS_NORTH_ALL = (VNState.OT_N, VNState.OT_N_EX)  # 10, 14
-OTS_WEST_ALL = (VNState.OT_W, VNState.OT_W_EX)  # 11, 15
-OTS_SOUTH_ALL = (VNState.OT_S, VNState.OT_S_EX)  # 12, 16
-
-CONFLUENT_EMITTING = (VNState.C10, VNState.C11)  # 26, 28
+def _pointing_into(by_direction: Mapping[Direction, int], side: Direction) -> FrozenSet[int]:
+    """States of one directional family, on neighbour ``side``, that point at us."""
+    return frozenset({by_direction[OPPOSITE_DIRECTION[side]]})
 
 
-def has_sts_pointing_excited(north: int, east: int, south: int, west: int) -> bool:
-    """Check if any adjacent STS cell points to center and is excited (destruction pulse)."""
-    return (
-        west == STS_EAST_EXC
-        or south == STS_NORTH_EXC
-        or east == STS_WEST_EXC
-        or north == STS_SOUTH_EXC
+def _pulse_in(side: Direction) -> FrozenSet[int]:
+    """Any excited ordinary or special transmission cell pointing into ``side``."""
+    return _pointing_into(OTS_EXCITED_BY_DIR, side) | _pointing_into(STS_EXCITED_BY_DIR, side)
+
+
+def build_rule_set() -> RuleSet:
+    """Construct the complete von Neumann 29-state rule set."""
+    rs = RuleSet(STATE_COUNT)
+
+    def rule(center, new, domains: Optional[Dict[Direction, FrozenSet[int]]] = None) -> None:
+        domains = domains or {}
+        rs.add(
+            center=center,
+            north=domains.get(Direction.NORTH, ALL_STATES),
+            east=domains.get(Direction.EAST, ALL_STATES),
+            south=domains.get(Direction.SOUTH, ALL_STATES),
+            west=domains.get(Direction.WEST, ALL_STATES),
+            new=int(new),
+        )
+
+    # -- 1. Ground ---------------------------------------------------------
+    # Unexcitable background becomes sensitized when fed an excited pulse.
+    for s in DIRECTIONS:
+        rule({VNState.U}, VNState.S, {s: _pulse_in(s)})
+
+    # -- 2. Sensitized bifurcation tree ------------------------------------
+    # A sensitized cell reads one bit per tick and walks towards the addressed
+    # functional state; if no pulse arrives it takes the "0" branch.
+    for state, (bit0, bit1) in _TREE.items():
+        rule({state}, bit0, {s: ALL_STATES - _pulse_in(s) for s in DIRECTIONS})
+        for s in DIRECTIONS:
+            rule({state}, bit1, {s: _pulse_in(s)})
+
+    # -- 3. Transmission families (ordinary and special) -------------------
+    _add_transmission_rules(
+        rule,
+        quiescent_by_dir=OTS_QUIESCENT_BY_DIR,
+        excited_by_dir=OTS_EXCITED_BY_DIR,
+        killer_by_dir=STS_EXCITED_BY_DIR,  # special pulses erase ordinary cells
+    )
+    _add_transmission_rules(
+        rule,
+        quiescent_by_dir=STS_QUIESCENT_BY_DIR,
+        excited_by_dir=STS_EXCITED_BY_DIR,
+        killer_by_dir=OTS_EXCITED_BY_DIR,  # ordinary pulses erase special cells
     )
 
-
-def has_ots_pointing_excited(north: int, east: int, south: int, west: int) -> bool:
-    """Check if any adjacent OTS cell points to center and is excited (antagonistic destruction pulse)."""
-    return (
-        west == OTS_EAST_EXC
-        or south == OTS_NORTH_EXC
-        or east == OTS_WEST_EXC
-        or north == OTS_SOUTH_EXC
-    )
+    # -- 4. Confluent (delay buffer + AND gate) ----------------------------
+    _add_confluent_rules(rule)
+    return rs
 
 
-def has_any_pointing_excited(north: int, east: int, south: int, west: int) -> bool:
-    """Check if any adjacent OTS or STS cell points to center and is excited (sensitization input)."""
-    return (
-        west in (OTS_EAST_EXC, STS_EAST_EXC)
-        or south in (OTS_NORTH_EXC, STS_NORTH_EXC)
-        or east in (OTS_WEST_EXC, STS_WEST_EXC)
-        or north in (OTS_SOUTH_EXC, STS_SOUTH_EXC)
-    )
+def _add_transmission_rules(rule, *, quiescent_by_dir, excited_by_dir, killer_by_dir) -> None:
+    """Rules shared by the ordinary and special transmission families."""
+
+    def feed_in(s: Direction) -> FrozenSet[int]:
+        # Fed by an excited cell of our own family, or by an emitting confluent.
+        return _pointing_into(excited_by_dir, s) | CONFLUENT_EMITTING
+
+    def killer_in(s: Direction) -> FrozenSet[int]:
+        return _pointing_into(killer_by_dir, s)
+
+    for d in DIRECTIONS:
+        qui = quiescent_by_dir[d]
+        exc = excited_by_dir[d]
+
+        # (a) Antagonistic erasure by the other family takes priority.
+        for s in DIRECTIONS:
+            rule({qui, exc}, VNState.U, {s: killer_in(s)})
+
+        # (b) Relaying: a pulse from any side *other than* the one we point at
+        #     (our downstream neighbour) excites us.
+        for s in DIRECTIONS:
+            if s != d:
+                rule({qui, exc}, exc, {s: feed_in(s)})
+
+        # (c) An already-excited cell relaxes to quiescent unless still fed.
+        domains: Dict[Direction, FrozenSet[int]] = {}
+        for s in DIRECTIONS:
+            if s == d:
+                # Downstream neighbour imposes no feed condition.
+                domains[s] = ALL_STATES - killer_in(s)
+            else:
+                domains[s] = ALL_STATES - (feed_in(s) | killer_in(s))
+        rule({exc}, qui, domains)
+
+
+def _add_confluent_rules(rule) -> None:
+    def excited_line_in(s: Direction) -> FrozenSet[int]:
+        return _pointing_into(OTS_EXCITED_BY_DIR, s)
+
+    def quiescent_line_in(s: Direction) -> FrozenSet[int]:
+        return _pointing_into(OTS_QUIESCENT_BY_DIR, s)
+
+    # Antagonistic erasure by an excited special pulse.
+    for s in DIRECTIONS:
+        rule(CONFLUENT, VNState.U, {s: _pointing_into(STS_EXCITED_BY_DIR, s)})
+
+    def advance(center: VNState, input_bit: int) -> int:
+        _, buffered = _CONFLUENT_BITS[center]
+        return int(_BITS_TO_CONFLUENT[(buffered, input_bit)])
+
+    # Input = 1: at least one excited line, and *no* quiescent line anywhere
+    # (i.e. every input line is excited — von Neumann's AND).
+    for feed in DIRECTIONS:
+        domains = {
+            s: (excited_line_in(s) if s == feed else ALL_STATES - quiescent_line_in(s))
+            for s in DIRECTIONS
+        }
+        for center in CONFLUENT:
+            rule({center}, advance(center, 1), domains)
+
+    # Input = 0: a quiescent line is present ...
+    for quiet in DIRECTIONS:
+        domains = {quiet: quiescent_line_in(quiet)}
+        for center in CONFLUENT:
+            rule({center}, advance(center, 0), domains)
+    # ... or there is no excited line at all.
+    domains = {s: ALL_STATES - excited_line_in(s) for s in DIRECTIONS}
+    for center in CONFLUENT:
+        rule({center}, advance(center, 0), domains)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+_AUTOMATON: Optional[TableAutomaton] = None
+
+
+def automaton() -> TableAutomaton:
+    """Return the compiled von Neumann automaton (built once, lazily)."""
+    global _AUTOMATON
+    if _AUTOMATON is None:
+        _AUTOMATON = TableAutomaton.from_ruleset(build_rule_set())
+    return _AUTOMATON
 
 
 def cell_next_state(center: int, north: int, east: int, south: int, west: int) -> int:
-    """Compute the synchronous next state for a single cell given its 4 orthogonal neighbors."""
-    c = center
-
-    # 1. GROUND STATE (U = 0)
-    if c == VNState.U:
-        if has_any_pointing_excited(north, east, south, west):
-            return VNState.S
-        return VNState.U
-
-    # 2. SENSITIZED STATES (1..8)
-    if 1 <= c <= 8:
-        # Input bit is 1 if any adjacent pointing transmission cell is excited
-        inp = 1 if has_any_pointing_excited(north, east, south, west) else 0
-
-        if c == VNState.S:
-            return VNState.S1 if inp else VNState.S0
-        elif c == VNState.S0:
-            return VNState.S01 if inp else VNState.S00
-        elif c == VNState.S1:
-            return VNState.S11 if inp else VNState.S10
-        elif c == VNState.S00:
-            return VNState.OT_W if inp else VNState.S000
-        elif c == VNState.S01:
-            return VNState.ST_E if inp else VNState.OT_S
-        elif c == VNState.S10:
-            return VNState.ST_W if inp else VNState.ST_N
-        elif c == VNState.S11:
-            return VNState.C00 if inp else VNState.ST_S
-        elif c == VNState.S000:
-            return VNState.OT_N if inp else VNState.OT_E
-
-    # 3. ORDINARY TRANSMISSION STATES (9..16)
-    if 9 <= c <= 16:
-        # Destruction: STS excited pulse destroys OTS
-        if has_sts_pointing_excited(north, east, south, west):
-            return VNState.U
-
-        # Determine center direction & base quiescent state
-        if c in (VNState.OT_E, VNState.OT_E_EX):
-            base_qui = VNState.OT_E
-            direction = "EAST"
-        elif c in (VNState.OT_N, VNState.OT_N_EX):
-            base_qui = VNState.OT_N
-            direction = "NORTH"
-        elif c in (VNState.OT_W, VNState.OT_W_EX):
-            base_qui = VNState.OT_W
-            direction = "WEST"
-        else:
-            base_qui = VNState.OT_S
-            direction = "SOUTH"
-
-        # Check for incoming excited ordinary transmission or confluent emission
-        # (excluding the neighbor center is pointing towards)
-        excited = False
-
-        # From West (neighbor pointing East)
-        if direction != "WEST":
-            if west == OTS_EAST_EXC or (west in CONFLUENT_EMITTING):
-                excited = True
-        # From South (neighbor pointing North)
-        if not excited and direction != "SOUTH":
-            if south == OTS_NORTH_EXC or (south in CONFLUENT_EMITTING):
-                excited = True
-        # From East (neighbor pointing West)
-        if not excited and direction != "EAST":
-            if east == OTS_WEST_EXC or (east in CONFLUENT_EMITTING):
-                excited = True
-        # From North (neighbor pointing South)
-        if not excited and direction != "NORTH":
-            if north == OTS_SOUTH_EXC or (north in CONFLUENT_EMITTING):
-                excited = True
-
-        return (base_qui + 4) if excited else base_qui
-
-    # 4. SPECIAL TRANSMISSION STATES (17..24)
-    if 17 <= c <= 24:
-        # Destruction: OTS excited pulse destroys STS
-        if has_ots_pointing_excited(north, east, south, west):
-            return VNState.U
-
-        # Determine center direction & base quiescent state
-        if c in (VNState.ST_E, VNState.ST_E_EX):
-            base_qui = VNState.ST_E
-            direction = "EAST"
-        elif c in (VNState.ST_N, VNState.ST_N_EX):
-            base_qui = VNState.ST_N
-            direction = "NORTH"
-        elif c in (VNState.ST_W, VNState.ST_W_EX):
-            base_qui = VNState.ST_W
-            direction = "WEST"
-        else:
-            base_qui = VNState.ST_S
-            direction = "SOUTH"
-
-        # Check for incoming excited special transmission or confluent emission
-        # (excluding the neighbor center is pointing towards)
-        excited = False
-
-        if direction != "WEST":
-            if west == STS_EAST_EXC or (west in CONFLUENT_EMITTING):
-                excited = True
-        if not excited and direction != "SOUTH":
-            if south == STS_NORTH_EXC or (south in CONFLUENT_EMITTING):
-                excited = True
-        if not excited and direction != "EAST":
-            if east == STS_WEST_EXC or (east in CONFLUENT_EMITTING):
-                excited = True
-        if not excited and direction != "NORTH":
-            if north == STS_SOUTH_EXC or (north in CONFLUENT_EMITTING):
-                excited = True
-
-        return (base_qui + 4) if excited else base_qui
-
-    # 5. CONFLUENT STATES (25..28)
-    if 25 <= c <= 28:
-        # Destruction: STS excited pulse destroys Confluent
-        if has_sts_pointing_excited(north, east, south, west):
-            return VNState.U
-
-        # Confluent takes inputs from OTS cells pointing towards it
-        # and applies AND logic across all feeding lines.
-        input_lines = 0
-        excited_lines = 0
-
-        # West neighbor pointing East into C
-        if west in OTS_EAST_ALL:
-            input_lines += 1
-            if west == OTS_EAST_EXC:
-                excited_lines += 1
-
-        # South neighbor pointing North into C
-        if south in OTS_NORTH_ALL:
-            input_lines += 1
-            if south == OTS_NORTH_EXC:
-                excited_lines += 1
-
-        # East neighbor pointing West into C
-        if east in OTS_WEST_ALL:
-            input_lines += 1
-            if east == OTS_WEST_EXC:
-                excited_lines += 1
-
-        # North neighbor pointing South into C
-        if north in OTS_SOUTH_ALL:
-            input_lines += 1
-            if north == OTS_SOUTH_EXC:
-                excited_lines += 1
-
-        # Input bit: 1 if at least one input line exists and ALL feeding lines are excited
-        inp = 1 if (input_lines > 0 and excited_lines == input_lines) else 0
-
-        # 2-bit delay buffer update:
-        # State:
-        # C00 (25): now=0, next=0
-        # C10 (26): now=1, next=0
-        # C01 (27): now=0, next=1
-        # C11 (28): now=1, next=1
-        if c in (VNState.C00, VNState.C10):
-            # next bit from t becomes now bit (0)
-            return VNState.C01 if inp else VNState.C00
-        else:
-            # next bit from t was 1, becomes now bit (1)
-            return VNState.C11 if inp else VNState.C10
-
-    return VNState.U
+    """Synchronous next state of one cell from its 5-cell von Neumann neighbourhood."""
+    return automaton().next_state(center, north, east, south, west)
 
 
 def step_grid(grid: np.ndarray, torus: bool = False) -> np.ndarray:
-    """Synchronously advance a 2D NumPy array of cell states by one clock tick.
-    
-    Parameters:
-        grid: 2D integer array with shape (height, width)
-        torus: whether to wrap boundaries (default False, infinite/zero-padded universe)
-    
-    Returns:
-        New 2D integer array of states at time t+1.
-    """
-    height, width = grid.shape
-    new_grid = np.zeros_like(grid)
-
-    if torus:
-        # np.roll(shift=-1) moves row y+1 into row y, i.e. the north
-        # neighbor (x, y+1) in Mesa Cartesian coordinates where arr[y, x].
-        north = np.roll(grid, shift=-1, axis=0)
-        south = np.roll(grid, shift=1, axis=0)
-        east = np.roll(grid, shift=-1, axis=1)
-        west = np.roll(grid, shift=1, axis=1)
-    else:
-        # Zero-pad boundaries (ground state outside).
-        # padded[y + 1, x + 1] == grid[y, x], so:
-        #   north (x, y+1) -> padded row y+2 -> padded[2:, :]
-        #   south (x, y-1) -> padded row y   -> padded[:-2, :]
-        padded = np.pad(grid, 1, mode="constant", constant_values=VNState.U)
-        north = padded[2:, 1:-1]
-        south = padded[:-2, 1:-1]
-        west = padded[1:-1, :-2]
-        east = padded[1:-1, 2:]
-
-    # Apply transitions: Numba-compiled kernel when available (same rules as
-    # cell_next_state, plain ints so njit can compile it), else Python loops.
-    if _HAS_NUMBA:
-        _step_kernel_nb(grid, north, east, south, west, new_grid)
-    else:
-        for y in range(height):
-            for x in range(width):
-                new_grid[y, x] = cell_next_state(
-                    grid[y, x],
-                    north[y, x],
-                    east[y, x],
-                    south[y, x],
-                    west[y, x],
-                )
-
-    return new_grid
+    """Advance a 2-D ``grid[y, x]`` of states by one synchronous tick."""
+    return automaton().step(grid, torus=torus)
 
 
-@_njit(cache=True)
-def _step_kernel_nb(grid, north, east, south, west, out):
-    """Numba fast path mirroring cell_next_state with int state codes."""
-    h, w = grid.shape
-    for y in range(h):
-        for x in range(w):
-            c = grid[y, x]
-            n = north[y, x]
-            e = east[y, x]
-            s = south[y, x]
-            ww = west[y, x]
-
-            # 1. Ground
-            if c == 0:
-                out[y, x] = 1 if (
-                    ww == 13 or ww == 21
-                    or s == 14 or s == 22
-                    or e == 15 or e == 23
-                    or n == 16 or n == 24
-                ) else 0
-                continue
-
-            # 2. Sensitized 1..8
-            if 1 <= c <= 8:
-                inp = 1 if (
-                    ww == 13 or ww == 21
-                    or s == 14 or s == 22
-                    or e == 15 or e == 23
-                    or n == 16 or n == 24
-                ) else 0
-                if c == 1:
-                    out[y, x] = 3 if inp else 2
-                elif c == 2:
-                    out[y, x] = 5 if inp else 4
-                elif c == 3:
-                    out[y, x] = 7 if inp else 6
-                elif c == 4:
-                    out[y, x] = 11 if inp else 8
-                elif c == 5:
-                    out[y, x] = 17 if inp else 12
-                elif c == 6:
-                    out[y, x] = 19 if inp else 18
-                elif c == 7:
-                    out[y, x] = 25 if inp else 20
-                else:
-                    out[y, x] = 10 if inp else 9
-                continue
-
-            # 3. Ordinary transmission 9..16
-            if 9 <= c <= 16:
-                # STS destruction
-                if ww == 21 or s == 22 or e == 23 or n == 24:
-                    out[y, x] = 0
-                    continue
-                if c == 9 or c == 13:
-                    base = 9
-                    direction = 1
-                elif c == 10 or c == 14:
-                    base = 10
-                    direction = 2
-                elif c == 11 or c == 15:
-                    base = 11
-                    direction = 3
-                else:
-                    base = 12
-                    direction = 4
-                excited = False
-                if direction != 3 and (ww == 13 or ww == 26 or ww == 28):
-                    excited = True
-                if not excited and direction != 4 and (s == 14 or s == 26 or s == 28):
-                    excited = True
-                if not excited and direction != 1 and (e == 15 or e == 26 or e == 28):
-                    excited = True
-                if not excited and direction != 2 and (n == 16 or n == 26 or n == 28):
-                    excited = True
-                out[y, x] = base + 4 if excited else base
-                continue
-
-            # 4. Special transmission 17..24
-            if 17 <= c <= 24:
-                if ww == 13 or s == 14 or e == 15 or n == 16:
-                    out[y, x] = 0
-                    continue
-                if c == 17 or c == 21:
-                    base = 17
-                    direction = 1
-                elif c == 18 or c == 22:
-                    base = 18
-                    direction = 2
-                elif c == 19 or c == 23:
-                    base = 19
-                    direction = 3
-                else:
-                    base = 20
-                    direction = 4
-                excited = False
-                if direction != 3 and (ww == 21 or ww == 26 or ww == 28):
-                    excited = True
-                if not excited and direction != 4 and (s == 22 or s == 26 or s == 28):
-                    excited = True
-                if not excited and direction != 1 and (e == 23 or e == 26 or e == 28):
-                    excited = True
-                if not excited and direction != 2 and (n == 24 or n == 26 or n == 28):
-                    excited = True
-                out[y, x] = base + 4 if excited else base
-                continue
-
-            # 5. Confluent 25..28
-            if 25 <= c <= 28:
-                if ww == 21 or s == 22 or e == 23 or n == 24:
-                    out[y, x] = 0
-                    continue
-                nlines = 0
-                elines = 0
-                if ww == 9 or ww == 13:
-                    nlines += 1
-                    if ww == 13:
-                        elines += 1
-                if s == 10 or s == 14:
-                    nlines += 1
-                    if s == 14:
-                        elines += 1
-                if e == 11 or e == 15:
-                    nlines += 1
-                    if e == 15:
-                        elines += 1
-                if n == 12 or n == 16:
-                    nlines += 1
-                    if n == 16:
-                        elines += 1
-                inp = 1 if (nlines > 0 and elines == nlines) else 0
-                if c == 25 or c == 26:
-                    out[y, x] = 27 if inp else 25
-                else:
-                    out[y, x] = 28 if inp else 26
-                continue
-
-            out[y, x] = 0
+def rule_count() -> int:
+    """Number of generated transition rules (diagnostics/tests)."""
+    return len(build_rule_set())

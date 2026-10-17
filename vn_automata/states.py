@@ -7,7 +7,10 @@ Canonical encoding matches the standard JvN29 rule specification:
 - 13-16: Ordinary Transmission States (Excited: East, North, West, South)
 - 17-20: Special Transmission States (Quiescent: East, North, West, South)
 - 21-24: Special Transmission States (Excited: East, North, West, South)
-- 25-28: Confluent states (C00, C10, C01, C11)
+- 25-28: Confluent states (C00, C01, C10, C11)
+
+Numbering and colours follow the canonical Golly ``JvN29.rule`` table (see
+:mod:`vn_automata.golly`), which is the de-facto reference implementation.
 """
 
 from enum import IntEnum, unique
@@ -69,10 +72,10 @@ class VNState(IntEnum):
     ST_W_EX = 23
     ST_S_EX = 24
 
-    # Confluent states
+    # Confluent states (canonical Golly JvN29 numbering)
     C00 = 25  # Quiescent now, quiescent next
-    C10 = 26  # Excited now, quiescent next
-    C01 = 27  # Quiescent now, excited next
+    C01 = 26  # Quiescent now, excited next
+    C10 = 27  # Excited now, quiescent next
     C11 = 28  # Excited now, excited next
 
 
@@ -115,7 +118,7 @@ STATE_INFO = {
     ),
     VNState.S10: StateMetadata(
         6, "S10", "S₁₀", StateCategory.SENSITIZED, Direction.NONE, False,
-        (255, 255, 100), "#ffff64", "Sensitized (after pulse 10)"
+        (255, 225, 100), "#ffe164", "Sensitized (after pulse 10)"
     ),
     VNState.S11: StateMetadata(
         7, "S11", "S₁₁", StateCategory.SENSITIZED, Direction.NONE, False,
@@ -147,7 +150,7 @@ STATE_INFO = {
     # Ordinary transmission excited
     VNState.OT_E_EX: StateMetadata(
         13, "OT_E_EX", "▸", StateCategory.ORDINARY_TRANSMISSION, Direction.EAST, True,
-        (27, 176, 27), "#1bb01b", "Ordinary transmission East (excited pulse)"
+        (27, 126, 27), "#1b7e1b", "Ordinary transmission East (excited pulse)"
     ),
     VNState.OT_N_EX: StateMetadata(
         14, "OT_N_EX", "▴", StateCategory.ORDINARY_TRANSMISSION, Direction.NORTH, True,
@@ -165,7 +168,7 @@ STATE_INFO = {
     # Special transmission quiescent
     VNState.ST_E: StateMetadata(
         17, "ST_E", "⇒", StateCategory.SPECIAL_TRANSMISSION, Direction.EAST, False,
-        (235, 36, 36), "#eb2424", "Special transmission East (construction arm wire)"
+        (255, 36, 36), "#ff2424", "Special transmission East (construction arm wire)"
     ),
     VNState.ST_N: StateMetadata(
         18, "ST_N", "⇑", StateCategory.SPECIAL_TRANSMISSION, Direction.NORTH, False,
@@ -203,13 +206,13 @@ STATE_INFO = {
         25, "C00", "©", StateCategory.CONFLUENT, Direction.NONE, False,
         (0, 255, 128), "#00ff80", "Confluent node (quiescent now, quiescent next)"
     ),
-    VNState.C10: StateMetadata(
-        26, "C10", "✱", StateCategory.CONFLUENT, Direction.NONE, True,
-        (255, 255, 128), "#ffff80", "Confluent node (emitting pulse now, quiescent next)"
-    ),
     VNState.C01: StateMetadata(
-        27, "C01", "⊙", StateCategory.CONFLUENT, Direction.NONE, False,
+        26, "C01", "⊙", StateCategory.CONFLUENT, Direction.NONE, False,
         (255, 128, 64), "#ff8040", "Confluent node (quiescent now, emitting pulse next)"
+    ),
+    VNState.C10: StateMetadata(
+        27, "C10", "✱", StateCategory.CONFLUENT, Direction.NONE, True,
+        (255, 255, 128), "#ffff80", "Confluent node (emitting pulse now, quiescent next)"
     ),
     VNState.C11: StateMetadata(
         28, "C11", "✪", StateCategory.CONFLUENT, Direction.NONE, True,
@@ -219,3 +222,62 @@ STATE_INFO = {
 
 STATE_COLORS = {s: info.hex_color for s, info in STATE_INFO.items()}
 STATE_NAMES = {s: info.name for s, info in STATE_INFO.items()}
+STATE_COUNT = len(VNState)
+
+
+# ---------------------------------------------------------------------------
+# Functional state groups.
+#
+# These are the vocabulary of von Neumann's automaton: instead of referring to
+# raw integers, the transition rules (see ``rules.py``) are written in terms of
+# the roles these states play. A directional transmission state "points" in a
+# compass direction; a cell of that kind only ever transmits its excitation to
+# the neighbour it points at.
+# ---------------------------------------------------------------------------
+
+GROUND = frozenset({VNState.U})
+
+SENSITIZED = frozenset(
+    {VNState.S, VNState.S0, VNState.S1, VNState.S00,
+     VNState.S01, VNState.S10, VNState.S11, VNState.S000}
+)
+
+OTS_QUIESCENT = frozenset({VNState.OT_E, VNState.OT_N, VNState.OT_W, VNState.OT_S})
+OTS_EXCITED = frozenset({VNState.OT_E_EX, VNState.OT_N_EX, VNState.OT_W_EX, VNState.OT_S_EX})
+OTS = OTS_QUIESCENT | OTS_EXCITED
+
+STS_QUIESCENT = frozenset({VNState.ST_E, VNState.ST_N, VNState.ST_W, VNState.ST_S})
+STS_EXCITED = frozenset({VNState.ST_E_EX, VNState.ST_N_EX, VNState.ST_W_EX, VNState.ST_S_EX})
+STS = STS_QUIESCENT | STS_EXCITED
+
+CONFLUENT = frozenset({VNState.C00, VNState.C01, VNState.C10, VNState.C11})
+# A confluent cell emits to all four neighbours only while its "excited now"
+# bit is set — states C10 and C11 in the canonical numbering.
+CONFLUENT_EMITTING = frozenset({VNState.C10, VNState.C11})
+
+TRANSMISSION = OTS | STS
+
+# Compass directions. ``OPPOSITE`` is used to test whether a neighbouring
+# directional cell points *towards* the cell under consideration.
+OPPOSITE_DIRECTION = {
+    Direction.EAST: Direction.WEST,
+    Direction.WEST: Direction.EAST,
+    Direction.NORTH: Direction.SOUTH,
+    Direction.SOUTH: Direction.NORTH,
+}
+
+# Direction -> state lookup tables, keyed by the ``Direction`` enum.
+OTS_QUIESCENT_BY_DIR = {STATE_INFO[s].direction: s for s in OTS_QUIESCENT}
+OTS_EXCITED_BY_DIR = {STATE_INFO[s].direction: s for s in OTS_EXCITED}
+STS_QUIESCENT_BY_DIR = {STATE_INFO[s].direction: s for s in STS_QUIESCENT}
+STS_EXCITED_BY_DIR = {STATE_INFO[s].direction: s for s in STS_EXCITED}
+
+
+def is_excited(state: int) -> bool:
+    """True if ``state`` is currently carrying/emitting a signal.
+
+    This is the definition used by the ``ActivePulses`` metric: excited
+    ordinary/special transmission and confluent cells that are emitting *now*.
+    Sensitized construction transients deliberately do not count.
+    """
+    return STATE_INFO[VNState(int(state))].is_excited

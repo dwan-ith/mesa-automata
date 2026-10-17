@@ -16,6 +16,8 @@ While Conway's *Game of Life* (1970) later demonstrated that simple 2-state loca
 
 This repository provides a Python/Mesa implementation of the 29-state rule-set, transmission/construction demonstrator patterns, test validation suite, and an interactive real-time visualizer.
 
+The transition function is **generated from a description of the model**, not transcribed as a list of cases — see [§2.1](#21-how-the-rules-are-implemented). It is then validated, exhaustively, against the canonical Golly `JvN29.rule` table.
+
 > Scope note: this covers the verified transmission rules, confluent logic, antagonistic erasure, and single-cell synthesis via the sensitized tree (the 9 canonical pulse sequences). A full universal constructor + tape + self-replicating configuration (100k+ cells, never completely specified in the literature) is out of scope.
 
 ---
@@ -30,7 +32,7 @@ Von Neumann's cellular automaton operates on a 2D Cartesian grid with a **5-cell
 | **Sensitized / Transition** | `S, S0, S1, S00, S01, S10, S11, S000` (1–8) | 8 | Transient differentiation tree directing cell synthesis from incoming pulse trains. |
 | **Ordinary Transmission (OTS)** | `OT_E, OT_N, OT_W, OT_S` (9–12: Quiescent)<br>`OT_E_EX, OT_N_EX, OT_W_EX, OT_S_EX` (13–16: Excited) | 8 | Directional wires that route binary control and computational pulses. |
 | **Special Transmission (STS)** | `ST_E, ST_N, ST_W, ST_S` (17–20: Quiescent)<br>`ST_E_EX, ST_N_EX, ST_W_EX, ST_S_EX` (21–24: Excited) | 8 | Construction arm wires. Pulses emerging at the tip synthesize new cells. |
-| **Confluent Nodes** | `C00, C10, C01, C11` (25–28) | 4 | Signal splitters (fan-out), ordinary-to-special conversion bridges, and 2-input AND gates with 1-cycle delay. |
+| **Confluent Nodes** | `C00, C01, C10, C11` (25–28) | 4 | Signal splitters (fan-out), ordinary-to-special conversion bridges, and 2-input AND gates with 1-cycle delay. Numbering and colours follow the canonical Golly `JvN29.rule` table. |
 
 ### The Construction Bifurcation Tree
 
@@ -59,6 +61,30 @@ To retract the construction arm or clear obstacles, the ordinary and special tra
 - An excited **Special Transmission** pulse entering an **Ordinary Transmission** or **Confluent** cell erases it back to ground `U`.
 - An excited **Ordinary Transmission** pulse entering a **Special Transmission** cell erases it back to ground `U`.
 
+### 2.1 How the rules are implemented
+
+There is no giant `if state == 13: ... elif state == 14: ...` cascade. Instead the
+rule set is *described* in the language of von Neumann's model and **compiled**
+into a lookup table:
+
+1. **Vocabulary** (`states.py`) — the 29 states are grouped by role:
+   `GROUND`, `SENSITIZED`, `OTS_QUIESCENT/OTS_EXCITED`, `STS_QUIESCENT/STS_EXCITED`,
+   `CONFLUENT`, and `CONFLUENT_EMITTING`, plus directional lookup tables.
+2. **Semantics** (`rules.py`) — the transition function is written once, in terms
+   of *directions*: a transmission cell is fed by any neighbour whose direction
+   points at it, is erased by an excited pulse of the antagonistic family, and a
+   confluent cell ANDs the ordinary lines pointing at it. `build_rule_set()`
+   emits ~150 rules from this description.
+3. **Engine** (`engine.py`) — a generic, rule-agnostic 5-neighbour CA compiler.
+   `RuleSet.compile()` turns the rules into a flat `uint8[29^5]` table; stepping
+   a grid is then a single vectorised gather (≈57M cells/s, pure NumPy, no
+   native extensions).
+
+This is both faster and more trustworthy than a hand-written cascade: the
+dynamics exist in exactly one place, and that place is checked against an
+external reference. Golly **Extended RLE** import/export (`rle.py`) lets real
+Golly patterns load here and vice versa.
+
 ---
 
 ## 3. Project Structure
@@ -71,11 +97,15 @@ Mesa-von-Neumann/
 ├── CONTRIBUTING.md             # Contribution guidelines
 ├── run_visualization.py        # CLI entry point to launch interactive visualizer
 ├── vn_automata/
-│   ├── states.py               # Enum of 29 states, metadata, symbols, and colors
-│   ├── rules.py                # Pure, deterministic transition functions & Numba-accelerated kernel
+│   ├── states.py               # The 29 states, metadata, colours, functional groups
+│   ├── engine.py               # Generic 5-neighbour CA rule compiler + table engine
+│   ├── rules.py                # Von Neumann's rule set, generated from the model
 │   ├── model.py                # Mesa 3.x Model (VonNeumannCA) and CellAgent
 │   ├── patterns.py             # Presets: Pulse loop, Confluent splitter, 1011 arm, Erasure
-│   ├── loader.py               # ASCII / RLE format parser and serializer
+│   ├── loader.py               # Compact ASCII pattern parser/serializer
+│   ├── rle.py                  # Golly Extended RLE import/export
+│   ├── golly.py                # Independent JvN29 reference engine (validates the rules)
+│   ├── data/JvN29.rule         # Bundled canonical Golly rule table (see data/NOTICE.md)
 │   └── visualizer/
 │       ├── server.py           # Simulation backend & REST API
 │       └── static/index.html   # Canvas UI with pan/zoom, inspector, and pulse builder
@@ -83,7 +113,10 @@ Mesa-von-Neumann/
     ├── test_states.py          # State space integrity tests
     ├── test_transitions.py     # Propagation, delay, and erasure rule tests
     ├── test_construction.py    # Complete 9-branch bifurcation tree tests
-    └── test_mesa_model.py      # Mesa Model, Agent lifecycle, and DataCollector tests
+    ├── test_patterns.py        # Behavioural tests of every preset pattern
+    ├── test_mesa_model.py      # Mesa Model, Agent lifecycle, and DataCollector tests
+    ├── test_rle.py             # Golly Extended RLE round-trips
+    └── test_golden_golly.py    # Golden tests against the canonical Golly JvN29 table
 ```
 
 ---
@@ -110,7 +143,22 @@ uv pip install -e ".[dev]"
 ```bash
 pytest -v
 ```
-All 30+ unit and integration tests validate the 29-state space, signal transmission (E/W/N/S), confluent delay/splitting, antagonistic erasure, pulse-train synthesis across all 9 target states, `step_grid`/model parity, torus wrapping, loader round-trips, and input validation.
+The test suite covers the 29-state space, signal transmission (E/W/N/S),
+confluent delay/splitting, antagonistic erasure, pulse-train synthesis across
+all 9 target states, emergent behaviour of every preset pattern,
+`step_grid`/model parity, torus wrapping, Golly RLE round-trips, and input
+validation.
+
+#### Correctness validation against Golly
+Rather than trusting the generated rules, the engine is checked against the
+canonical `JvN29.rule` table shipped with [Golly](http://golly.sourceforge.net/)
+(bundled at `vn_automata/data/JvN29.rule`, parsed independently by
+`vn_automata/golly.py`). `tests/test_golden_golly.py` asserts that the
+generated rule set compiles to a table **identical to the reference over all
+29⁵ = 20,511,149 neighbourhoods**, that the compiled table agrees with an
+independent first-match interpreter, and that multi-step evolution of random
+grids and a known construction configuration matches. This is what pins the
+"faithful to von Neumann's 29-state rule" claim to an external artefact.
 
 ### 3. Launch the Interactive Visualizer
 ```bash
@@ -147,6 +195,19 @@ model = VonNeumannCA(width=40, height=40, initial_pattern=pattern)
 for step in range(5):
     model.step()
     print(f"Tick {model.step_count}: {model.count_active_pulses()} active pulses, {model.count_sensitized_cells()} sensitized cells")
+```
+
+For array-level work, or to exchange patterns with Golly:
+
+```python
+from vn_automata import cell_next_state, step_grid, parse_rle, export_rle
+
+# One synchronous step of a whole grid (y, x), torus optional
+grid2 = step_grid(grid, torus=False)
+
+# Golly Extended RLE interoperability (understandable by Golly's JvN29)
+pattern = parse_rle("x = 3, y = 1, rule = JvN29\npApD!").pattern
+text = export_rle(pattern, rule="JvN29")
 ```
 
 ---

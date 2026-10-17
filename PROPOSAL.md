@@ -1,7 +1,7 @@
 # Proposal: Von Neumann 29-State Self-Reproducing Cellular Automaton Example for Mesa
 
 **Proposed Destination:** `mesa-examples` (Showcase / Advanced Cellular Automata)  
-**Authors:** Antigravity Mesa Contributors  
+**Authors:** dwan-ith  
 **Target Mesa Version:** Mesa 3.0+  
 **Contact:** `maintainers@projectmesa.dev` / [GitHub Discussions](https://github.com/projectmesa/mesa/discussions)
 
@@ -41,12 +41,15 @@ This example showcases how Mesa 3.x gracefully handles:
 
 | Component | Description |
 | :--- | :--- |
-| **`states.py`** | Type-safe `IntEnum` of all 29 states, directional metadata, and canonical color palette matching Golly/literature standards. |
-| **`rules.py`** | Pure, side-effect-free transition function `cell_next_state(...)` and vectorized NumPy stepping kernel. |
+| **`states.py`** | Type-safe `IntEnum` of all 29 states, directional metadata, functional groups, and canonical color palette matching Golly/literature standards. |
+| **`engine.py`** | A generic, rule-agnostic 5-neighbour CA engine that compiles a rule set into a flat `uint8[29^5]` lookup table and steps grids with vectorised NumPy (no native extensions). |
+| **`rules.py`** | Von Neumann's rule set *generated from the model* (directions, families, confluent logic) rather than transcribed, exposed as `cell_next_state(...)` / `step_grid(...)`. |
 | **`model.py`** | `VonNeumannCA(mesa.Model)` and `CellAgent(mesa.Agent)` using `SingleGrid(torus=False)`. |
 | **`patterns.py`** | Curated pedagogical presets: Continuous Pulse Loop, Confluent Splitter/Bridge, Construction Arm (1011), Antagonistic Wire Erasure, and Programmable Sequence Builder. |
+| **`loader.py` / `rle.py`** | Compact ASCII patterns plus **Golly Extended RLE** import/export for real interoperation with the reference simulator. |
+| **`golly.py` + `data/JvN29.rule`** | An independent parser/re-implementation of the canonical Golly rule table, used as an external correctness oracle. |
 | **`visualizer/`** | Interactive HTML5 Canvas dashboard with pan/zoom, hover inspector, real-time metrics, and custom pulse sequence synthesizer. |
-| **`tests/`** | 24 automated unit tests verifying the 29-state definitions, wire transmission, confluent delay, and the full 9-branch construction tree. |
+| **`tests/`** | Automated unit/integration tests verifying the 29-state definitions, wire transmission, confluent delay, the full 9-branch construction tree, emergent behaviour of every preset, RLE round-trips, and exact agreement with Golly over the complete state-transition space. |
 
 ---
 
@@ -54,6 +57,8 @@ This example showcases how Mesa 3.x gracefully handles:
 
 Correctness is verified against the canonical specification (Burks 1966, Buckley 2008, Golly JvN29):
 
+0. **Exhaustive Golly Agreement (Oracle):**  
+   `vn_automata/golly.py` parses the canonical `JvN29.rule` from Golly and re-implements the transition function independently. `tests/test_golden_golly.py` then asserts that the generated rule set (a) compiles to a lookup table identical to the reference over **all 29⁵ = 20,511,149 neighborhoods**, and (b) agrees with an independent first-match interpreter on random samples, and additionally matches the reference on multi-step evolution of randomized grids and a known construction configuration. The state numbering (25–28) and colour palette are taken from this same table.
 1. **Sensitization Tree Verification:**  
    Every target quiescent state is verified by automated pytest parameterized tests:
    - `10000` $\to$ East Ordinary Transmission
